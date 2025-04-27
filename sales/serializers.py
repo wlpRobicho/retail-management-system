@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError, PermissionDenied
-from .models import SalesTransaction, SalesItem, SaleLog, DiscountCode  # new logging model inside the sales app
+from .models import SalesTransaction, SalesItem, SaleLog, DiscountCode, CustomerLoyalty, LoyaltySettings  # new logging model inside the sales app
 from inventory.models import Product, ProductBatch
 from sales.models import CashierShift
 from decimal import Decimal, ROUND_HALF_UP
@@ -33,6 +33,7 @@ class SalesTransactionCreateSerializer(serializers.Serializer):
     is_refund = serializers.BooleanField(default=False)  # Indicates if the transaction is a refund
     items = SalesItemInputSerializer(many=True)  # List of items in the transaction
     discount_code = serializers.CharField(max_length=8, required=False, allow_blank=True)  # Optional discount code
+    phone_number = serializers.CharField(required=False, allow_blank=True)  # Optional phone number for loyalty tracking
 
     def validate(self, data):
         # Ensure amount_received is provided for cash payments
@@ -71,7 +72,9 @@ class SalesTransactionCreateSerializer(serializers.Serializer):
                         discount_obj = DiscountCode.objects.get(code=discount_code_str, is_active=True)
                         discount_applied = True
                     except DiscountCode.DoesNotExist:
-                        raise serializers.ValidationError("Invalid or inactive discount code.")
+                        raise serializers.ValidationError({
+                            "discount_code": "This discount code is invalid or has already been used."
+                        })
 
                 # Create the SalesTransaction object
                 sale = SalesTransaction.objects.create(
@@ -239,13 +242,45 @@ class SalesTransactionCreateSerializer(serializers.Serializer):
                 sale.change_due = change_due
                 sale.discount_code = discount_obj if discount_applied else None
                 sale.save()
+
+                # Mark the discount code as used
+                if discount_obj:
+                    discount_obj.is_active = False  # ❌ Disable the discount code after use
+                    discount_obj.save()
+
                 generate_receipt_pdf(sale)
+
+                result = {}  # Initialize result dictionary for response
+
+                # Track loyalty only for regular (non-refund) sales
+                if not is_refund and validated_data.get("phone_number"):
+                    phone = validated_data["phone_number"]
+                    loyalty, _ = CustomerLoyalty.objects.get_or_create(phone_number=phone)
+                    loyalty.total_spent += total_amount
+                    loyalty.save()
+
+                    settings = LoyaltySettings.objects.first()
+                    if settings:
+                        target = settings.spending_target
+                        current_milestone = int(loyalty.total_spent // target)
+
+                        if current_milestone > loyalty.rewards_earned:
+                            # 🎉 Customer has passed a new reward threshold
+                            code = DiscountCode.objects.create(type='loyalty')  # Set type to 'loyalty'
+                            loyalty.rewards_earned = current_milestone
+                            loyalty.save()
+
+                            sale.loyalty_discount_code = code
+                            sale.save()
+
+                            result["loyalty_discount_code"] = code.code  # Include the discount code in the response
 
         except Exception as e:
             # Rollback and provide clean error message
             raise ValidationError(f"Transaction failed: {str(e)}")
 
         return {
+            **result,  # Include loyalty discount code if generated
             "transaction_id": sale.id,
             "timestamp": sale.timestamp,
             "total_amount": str(sale.total_amount),

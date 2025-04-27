@@ -6,7 +6,9 @@ from django.utils.timezone import now
 from django.http import HttpResponse
 from django.utils.html import format_html
 import csv
-from .models import SalesTransaction, SalesItem, SaleLog, CashierShift, DiscountCode
+from .models import SalesTransaction, SalesItem, SaleLog, CashierShift, DiscountCode, CustomerLoyalty, LoyaltySettings
+from .models import AnalyticsDummy
+from django.shortcuts import redirect
 
 # Inline admin for displaying SalesItem details within a SalesTransaction
 class SalesItemInline(admin.TabularInline):
@@ -18,10 +20,10 @@ class SalesItemInline(admin.TabularInline):
 # Admin configuration for SalesTransaction
 @admin.register(SalesTransaction)
 class SalesTransactionAdmin(admin.ModelAdmin):
-    list_display = ['id', 'timestamp', 'cashier', 'total_amount', 'payment_method', 'discount_code', 'receipt_link']
+    list_display = ['id', 'timestamp', 'cashier', 'total_amount', 'payment_method', 'discount_code', 'loyalty_discount_code', 'receipt_link']
     list_filter = ['timestamp', 'cashier', 'payment_method', 'is_refund']
     search_fields = ['id', 'cashier__name']
-    readonly_fields = ['cashier', 'timestamp', 'total_amount', 'total_profit', 'payment_method', 'amount_received', 'change_due', 'is_refund', 'discount_code', 'receipt']
+    readonly_fields = ['cashier', 'timestamp', 'total_amount', 'total_profit', 'payment_method', 'amount_received', 'change_due', 'is_refund', 'discount_code', 'loyalty_discount_code', 'receipt']
     inlines = [SalesItemInline]
     actions = ['export_as_csv']
 
@@ -53,44 +55,27 @@ class SalesTransactionAdmin(admin.ModelAdmin):
             ])
         return response
 
-    # Adds a custom analytics view to the admin panel
-    def get_urls(self):
-        urls = super().get_urls()
-        custom_urls = [
-            path('analytics/', self.admin_site.admin_view(self.analytics_view), name='sales-analytics'),
-        ]
-        return custom_urls + urls
+# Adds a custom analytics view to the admin panel
+from django.contrib import admin
+from django.template.response import TemplateResponse
+from .models import AnalyticsDummy  # Import it from your models
 
-    # Analytics view to display daily and weekly sales data
-    def analytics_view(self, request):
-        today = now().date()
-        this_week = today.isocalendar()[1]
+@admin.register(AnalyticsDummy)
+class AnalyticsDummyAdmin(admin.ModelAdmin):
+    def has_add_permission(self, request):
+        return False
 
-        daily_sales = SalesTransaction.objects.filter(timestamp__date=today)
-        weekly_sales = SalesTransaction.objects.filter(timestamp__week=this_week)
+    def has_change_permission(self, request, obj=None):
+        return False
 
-        daily_revenue = daily_sales.aggregate(total=Sum('total_amount'))['total'] or 0
-        daily_profit = daily_sales.aggregate(total=Sum('total_profit'))['total'] or 0
-        weekly_revenue = weekly_sales.aggregate(total=Sum('total_amount'))['total'] or 0
-        weekly_profit = weekly_sales.aggregate(total=Sum('total_profit'))['total'] or 0
+    def has_delete_permission(self, request, obj=None):
+        return False
 
-        top_products = (SalesItem.objects
-                        .values('product__name')
-                        .annotate(total_sold=Sum('quantity'))
-                        .order_by('-total_sold')[:5])
+    def changelist_view(self, request, extra_context=None):
+        # Redirect to your Angular analytics page
+        return redirect('http://localhost:4200/analytics')
 
-        context = dict(
-            self.admin_site.each_context(request),
-            title="Sales Analytics",
-            daily_revenue=daily_revenue,
-            daily_profit=daily_profit,
-            weekly_revenue=weekly_revenue,
-            weekly_profit=weekly_profit,
-            top_products=top_products,
-        )
-
-        return TemplateResponse(request, "admin/sales/analytics.html", context)
-
+    
 # Admin configuration for SalesItem
 @admin.register(SalesItem)
 class SalesItemAdmin(admin.ModelAdmin):
@@ -160,7 +145,20 @@ class CashierShiftAdmin(admin.ModelAdmin):
 # Admin configuration for DiscountCode
 @admin.register(DiscountCode)
 class DiscountCodeAdmin(admin.ModelAdmin):
-    list_display = ['code', 'assigned_to', 'is_active', 'created_at']
-    search_fields = ['code', 'assigned_to__name', 'assigned_to__userid']
-    list_filter = ['is_active', 'created_at']
+    list_display = ['code', 'type', 'assigned_to', 'is_active', 'created_at']
+    list_filter = ['type', 'is_active', 'created_at']  # Add filter for type
+    search_fields = ['code', 'assigned_to__name']
     readonly_fields = ['code']  # You can see it but not edit
+
+# Admin configuration for CustomerLoyalty
+@admin.register(CustomerLoyalty)
+class CustomerLoyaltyAdmin(admin.ModelAdmin):
+    # Admin configuration for CustomerLoyalty model
+    list_display = ['phone_number', 'total_spent', 'discount_given']
+    search_fields = ['phone_number']
+
+# Admin configuration for LoyaltySettings
+@admin.register(LoyaltySettings)
+class LoyaltySettingsAdmin(admin.ModelAdmin):
+    # Admin configuration for LoyaltySettings model
+    list_display = ['spending_target', 'discount_percentage']

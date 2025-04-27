@@ -32,5 +32,14 @@ services:
       - DB_PASSWORD=postgres
       - DB_HOST=db
 
+  # frontend:
+  # build:
+  #   context: ../retail-front-end
+  #   container_name: retail_frontend
+  #   ports:
+  #   - "4200:80"  # 4200 (Angular default) maps to 80 in nginx
+  #   depends_on:
+  #   - backend 
+
 volumes:
   postgres_data:

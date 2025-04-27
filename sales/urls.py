@@ -1,6 +1,6 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from .views import SalesTransactionViewSet, SalesReceiptView, SalesAnalyticsView  # Import views for handling sales transactions, receipts, and analytics
+from .views import SalesTransactionViewSet, SalesReceiptView, SalesAnalyticsView, validate_discount_code  # Import views for handling sales transactions, receipts, and analytics
 
 # Initialize a DRF router for automatically generating routes for viewsets
 router = DefaultRouter()
@@ -16,4 +16,6 @@ urlpatterns = [
 
     # Analytics route for sales analytics
     path('analytics/', SalesAnalyticsView.as_view(), name='sales-analytics'),
+
+    path('discounts/validate/', validate_discount_code, name='validate-discount'),  # Add route for discount validation
 ]

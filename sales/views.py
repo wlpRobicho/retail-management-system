@@ -7,9 +7,10 @@ from .models import SalesTransaction
 from .serializers import SalesTransactionCreateSerializer, SalesTransactionListSerializer
 from rest_framework.views import APIView
 from django.http import HttpResponse, FileResponse, Http404, JsonResponse
-from rest_framework.decorators import action
+from rest_framework.decorators import action, api_view, permission_classes
 from .utils import generate_receipt_pdf  # Utility function for generating PDF receipts
 from .analytics import get_analytics  # Import the analytics logic
+from .models import DiscountCode
 
 # ViewSet for managing sales transactions
 class SalesTransactionViewSet(mixins.CreateModelMixin,
@@ -93,3 +94,32 @@ class SalesAnalyticsView(APIView):
         # Fetch analytics data using the helper function
         data = get_analytics()
         return Response(data)  # Return the analytics data as a JSON response
+
+def calculate_cart_total(cart_items):
+    # Calculate the total price of items in the cart
+    total = 0
+    for item in cart_items:
+        batch = item.batch
+        total += batch.effective_price * item.quantity  # Use effective price from the batch
+    return total
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def validate_discount_code(request):
+    code = request.query_params.get('code')
+    if not code:
+        return Response({"error": "No discount code provided."}, status=400)
+
+    try:
+        discount = DiscountCode.objects.get(code=code, is_active=True)
+        return Response({
+            "valid": True,
+            "code": discount.code,
+            "type": discount.type,
+            "message": "Discount code is valid."
+        })
+    except DiscountCode.DoesNotExist:
+        return Response({
+            "valid": False,
+            "message": "Invalid or already used discount code."
+        }, status=404)

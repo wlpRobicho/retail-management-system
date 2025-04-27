@@ -5,3 +5,4 @@ Pillow
 django-filter>=23.5
 djangorestframework-simplejwt
 reportlab
+django-cors-headers

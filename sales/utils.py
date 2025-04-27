@@ -95,6 +95,20 @@ def generate_receipt_pdf(transaction: SalesTransaction):
     y -= 10
     p.drawString(30, y, "ALJAMAA Store • Algeria")  # Store details
 
+    # Loyalty reward section
+    if transaction.loyalty_discount_code:
+        y -= 30
+        p.setFont("Helvetica-Bold", 11)
+        p.drawString(30, y, "=========================")
+        y -= 15
+        p.drawString(30, y, "🎁 Loyalty Reward Earned!")
+        y -= 15
+        p.drawString(30, y, f"Code: {transaction.loyalty_discount_code.code} (10% OFF)")
+        y -= 15
+        p.drawString(30, y, "Use this code on your next purchase.")
+        y -= 15
+        p.drawString(30, y, "=========================")
+
     # Finalize the PDF and save it to the buffer
     p.showPage()
     p.save()

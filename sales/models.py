@@ -26,6 +26,13 @@ class SalesTransaction(models.Model):
     amount_received = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)  # Amount received (if cash)
     is_refund = models.BooleanField(default=False)  # Indicates if the transaction is a refund
     discount_code = models.ForeignKey('DiscountCode', on_delete=models.SET_NULL, null=True, blank=True)  # Discount code applied
+    loyalty_discount_code = models.ForeignKey(
+        'DiscountCode',  # Use string reference to avoid NameError
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='rewarded_transactions'  # Allows reverse lookup for transactions using this reward code
+    )  # Loyalty discount code applied
     receipt = models.FileField(upload_to='receipts/', null=True, blank=True)  # PDF receipt file
 
     def __str__(self):
@@ -84,7 +91,13 @@ class CashierShift(models.Model):
 
 # Represents a discount code
 class DiscountCode(models.Model):
+    DISCOUNT_TYPES = (
+        ('staff', 'Staff'),
+        ('loyalty', 'Loyalty'),
+    )
+
     code = models.CharField(max_length=8, unique=True, editable=False)  # Unique discount code
+    type = models.CharField(max_length=10, choices=DISCOUNT_TYPES, default='staff')  # Type of discount code
     assigned_to = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)  # User assigned to the code
     is_active = models.BooleanField(default=True)  # Indicates if the code is active
     created_at = models.DateTimeField(auto_now_add=True)  # Timestamp when the code was created
@@ -96,5 +109,30 @@ class DiscountCode(models.Model):
         super().save(*args, **kwargs)
 
     def __str__(self):
-        # String representation includes code, assigned user, and active status
-        return f"{self.code} - {'Unassigned' if not self.assigned_to else self.assigned_to.name} (Active: {self.is_active})"
+        # String representation includes code, type, assigned user, and active status
+        return f"{self.code} ({self.type}) - {'Unassigned' if not self.assigned_to else self.assigned_to.name} (Active: {self.is_active})"
+
+# Tracks customer phone, total spending, and discount status
+class CustomerLoyalty(models.Model):
+    phone_number = models.CharField(max_length=15, unique=True)
+    total_spent = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    discount_given = models.BooleanField(default=False)
+    rewards_earned = models.PositiveIntegerField(default=0)  # Tracks how many reward milestones the customer has passed
+
+    def __str__(self):
+        return f"{self.phone_number} - Spent: {self.total_spent} DA - Rewards Earned: {self.rewards_earned}"
+
+# Stores manager-defined spending target and discount percentage
+class LoyaltySettings(models.Model):
+    spending_target = models.DecimalField(max_digits=10, decimal_places=2, default=10000)
+    discount_percentage = models.PositiveIntegerField(default=10)  # e.g., 10%
+
+    def __str__(self):
+        return f"Target: {self.spending_target} DA - {self.discount_percentage}% Discount"
+    
+
+class AnalyticsDummy(models.Model):
+    class Meta:
+        verbose_name = "Analytics 📈"
+        verbose_name_plural = "Analytics 📈"
+        managed = False  # No table will be created

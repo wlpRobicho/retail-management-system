@@ -37,16 +37,33 @@ class ProductFilter(django_filters.FilterSet):
         return queryset
 
     def filter_expiry_soon(self, queryset, name, value):
+        # Filter products with batches expiring soon (today or tomorrow)
         if value:
-            tomorrow = timezone.now().date() + timedelta(days=1)
-            return queryset.filter(expiry_date=tomorrow)
+            tomorrow = date.today() + timedelta(days=1)
+            return queryset.filter(
+                Exists(ProductBatch.objects.filter(
+                    product=OuterRef('pk'),
+                    expiry_date__lte=tomorrow,
+                    expiry_date__gte=date.today(),
+                    is_expired_handled=False,
+                    quantity__gt=0
+                ))
+            )
         return queryset
 
     def filter_expiry_in_next_7_days(self, queryset, name, value):
+        # Filter products with batches expiring in the next 7 days
         if value:
             today = date.today()
             next_7 = today + timedelta(days=7)
-            return queryset.filter(expiry_date__range=(today, next_7))
+            return queryset.filter(
+                Exists(ProductBatch.objects.filter(
+                    product=OuterRef('pk'),
+                    expiry_date__range=(today, next_7),
+                    is_expired_handled=False,
+                    quantity__gt=0
+                ))
+            )
         return queryset
 
     def filter_batch_expiring_tomorrow(self, queryset, name, value):

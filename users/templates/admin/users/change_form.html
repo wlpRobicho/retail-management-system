@@ -1,0 +1,43 @@
+{% extends "admin/change_form.html" %}
+
+{% block content %}
+  {% if messages %}
+    <ul class="messagelist">
+      {% for message in messages %}
+        <li{% if message.tags %} class="{{ message.tags }}"{% endif %}>{{ message }}</li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+  {{ block.super }}
+{% endblock %}
+
+{% block extrahead %}
+  {{ block.super }}
+  <script>
+    function regeneratePassword(userId) {
+      fetch(`/admin/users/user/${userId}/regenerate-password/`, {  // ✅ Fixed URL
+        method: 'POST',
+        headers: {
+          'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value,
+          'Accept': 'application/json'
+        },
+      })
+      .then(response => response.json())
+      .then(data => {
+        if (data.password) {
+          alert(`🔁 New password for ${data.userid}: ${data.password}`);
+        } else {
+          alert("⚠️ Failed to regenerate password.");
+        }
+      })
+      .catch(err => alert("❌ Error: " + err));
+    }
+  </script>
+{% endblock %}
+
+{% block object-tools-items %}
+  {{ block.super }}
+  <li>
+    <a class="button" href="javascript:void(0);" onclick="regeneratePassword({{ original.id }});">Regenerate Password</a>  <!-- ✅ Pass userId -->
+  </li>
+{% endblock %}

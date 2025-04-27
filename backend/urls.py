@@ -21,9 +21,9 @@ from django.conf.urls.static import static
 
 urlpatterns = [
     path('admin/', admin.site.urls),
-    path('users/', include('users.urls')),
-    path('inventory/', include('inventory.urls')),
-    path('sales/', include('sales.urls')),  # ✅ this includes the custom receipt path
+    path('api/users/', include('users.urls')),
+    path('api/inventory/', include('inventory.urls')),
+    path('api/sales/', include('sales.urls')),  # ✅ this includes the custom receipt path
 ]
 
 from rest_framework_simplejwt.views import (

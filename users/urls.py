@@ -1,12 +1,14 @@
-# users/urls.py
-
 from django.urls import path
-from .views import UserLoginView, CreateEmployeeView, UserLogoutView, CustomTokenObtainPairView
+from .views import (
+    UserLoginView,  # View for user login
+    UserLogoutView,  # View for user logout
+    CreateEmployeeView,  # View for creating a new employee
+    CustomTokenObtainPairView  # View for obtaining JWT tokens
+)
 
 urlpatterns = [
-    path('login/', UserLoginView.as_view(), name='login'),
-    path('create-employee/', CreateEmployeeView.as_view(), name='create-employee'),
-    path('logout/', UserLogoutView.as_view(), name='logout'),
-    path('api/token/', CustomTokenObtainPairView.as_view(), name='token_obtain_pair'),
-
+    path('login/', UserLoginView.as_view(), name='user-login'),  # Endpoint for user login
+    path('logout/', UserLogoutView.as_view(), name='user-logout'),  # Endpoint for user logout
+    path('create/', CreateEmployeeView.as_view(), name='user-create'),  # Endpoint for creating a new employee
+    path('token/', CustomTokenObtainPairView.as_view(), name='user-token'),  # Endpoint for obtaining JWT tokens
 ]

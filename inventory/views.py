@@ -1,5 +1,5 @@
 from rest_framework import viewsets, permissions
-from rest_framework.decorators import action
+from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 from .models import Category, Product, StockUpdateLog, RestockLog, ProductBatch
 from .serializers import CategorySerializer, ProductSerializer, ProductBatchSerializer
@@ -12,24 +12,30 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import PermissionDenied, APIException
 from datetime import date, timedelta
 from django.utils.timezone import now
+from django.db import transaction
+
 
 class IsManager(permissions.BasePermission):
+    # Custom permission to allow only managers to perform certain actions
     def has_permission(self, request, view):
         return request.user.position == 'manager'
 
 
 class CategoryViewSet(viewsets.ModelViewSet):
+    # ViewSet for managing product categories
     queryset = Category.objects.all()
     serializer_class = CategorySerializer
 
     def get_permissions(self):
+        # Restrict create, update, and delete actions to managers
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
             return [IsAuthenticated(), IsManager()]
         return [IsAuthenticated()]
 
     def create(self, request, *args, **kwargs):
+        # Handle creation of a single or multiple categories
         try:
-            is_many = isinstance(request.data, list)
+            is_many = isinstance(request.data, list)  # Check if multiple categories are being created
             serializer = self.get_serializer(data=request.data, many=is_many)
             serializer.is_valid(raise_exception=True)
             self.perform_create(serializer)
@@ -39,24 +45,29 @@ class CategoryViewSet(viewsets.ModelViewSet):
 
 
 class ProductViewSet(viewsets.ModelViewSet):
+    # ViewSet for managing products
     serializer_class = ProductSerializer
     filter_backends = [DjangoFilterBackend]
     filterset_class = ProductFilter
 
     def get_queryset(self):
+        # Return only active products, ordered by the last update
         return Product.objects.filter(is_active=True).order_by('-updated_at')
 
     def get_permissions(self):
+        # Restrict create, update, and delete actions to managers
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
             return [IsAuthenticated(), IsManager()]
         return [IsAuthenticated()]
 
+    @transaction.atomic
     def create(self, request, *args, **kwargs):
+        # Handle product creation with validation and logging
         try:
             serializer = self.get_serializer(data=request.data)
             serializer.is_valid(raise_exception=True)
 
-            # Validate cost price, selling price, and quantity
+            # Validate cost price and selling price
             if serializer.validated_data['cost_price'] < 0:
                 raise APIException("Cost price cannot be negative.")
             if serializer.validated_data['selling_price'] < 0:
@@ -64,32 +75,23 @@ class ProductViewSet(viewsets.ModelViewSet):
             if serializer.validated_data['selling_price'] < serializer.validated_data['cost_price']:
                 raise APIException("Selling price cannot be lower than cost price.")
 
-            # Check for duplicate barcodes
-            barcodes = [item['barcode'] for item in serializer.validated_data]
-            if Product.objects.filter(barcode__in=barcodes).exists():
-                raise APIException("A product with the same barcode already exists.")
+            # Save product and log creation
+            product = serializer.save()
+            StockUpdateLog.objects.create(
+                product=product,
+                updated_by=self.request.user,
+                change_type='created',
+                quantity_before=0,
+                quantity_after=product.quantity,
+            )
 
-            products = serializer.save()
-
-            if not isinstance(products, list):
-                products = [products]
-
-            for product in products:
-                StockUpdateLog.objects.create(
-                    product=product,
-                    updated_by=self.request.user,
-                    change_type='created',
-                    quantity_before=0,
-                    quantity_after=product.quantity,
-                )
-
-            return Response(self.get_serializer(products, many=True).data, status=201)
+            return Response(self.get_serializer(product).data, status=201)
         except Exception as e:
             raise APIException(f"Error creating product: {str(e)}")
 
+    @transaction.atomic
     def perform_create(self, serializer):
-        if not self.request.user.is_authenticated:
-            raise PermissionDenied("Authentication required to create a product.")
+        # Save a product and log its creation
         try:
             product = serializer.save()
             StockUpdateLog.objects.create(
@@ -102,7 +104,9 @@ class ProductViewSet(viewsets.ModelViewSet):
         except Exception as e:
             raise PermissionDenied(f"Error during product creation: {str(e)}")
 
+    @transaction.atomic
     def perform_update(self, serializer):
+        # Handle product updates and log changes
         product = self.get_object()
         old_values = {
             'category': product.category,
@@ -115,7 +119,7 @@ class ProductViewSet(viewsets.ModelViewSet):
         new_instance = serializer.save()
         user = self.request.user
 
-        # Check for changes
+        # Log changes to fields
         for field, old_value in old_values.items():
             new_value = getattr(new_instance, field)
             if old_value != new_value:
@@ -127,7 +131,7 @@ class ProductViewSet(viewsets.ModelViewSet):
                     note=f"{field} changed from {old_value} to {new_value}",
                 )
 
-        # Quantity logic still applies
+        # Log quantity changes
         old_quantity = product.quantity
         if old_quantity != new_instance.quantity:
             StockUpdateLog.objects.create(
@@ -138,15 +142,18 @@ class ProductViewSet(viewsets.ModelViewSet):
                 quantity_after=new_instance.quantity,
             )
 
+    @transaction.atomic
     def perform_destroy(self, instance):
+        # Soft delete a product and log the deletion
         try:
+            old_quantity = instance.quantity
             instance.is_active = False  # soft delete
             instance.save()
             StockUpdateLog.objects.create(
                 product=instance,
                 updated_by=self.request.user,
                 change_type='deleted',
-                quantity_before=instance.quantity,
+                quantity_before=old_quantity,
                 quantity_after=0,
             )
         except Exception as e:
@@ -154,6 +161,7 @@ class ProductViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'])
     def low_stock(self, request):
+        # Return products with low stock levels
         try:
             low_stock_items = Product.objects.annotate(
                 total_quantity=Sum('batches__quantity')
@@ -165,6 +173,7 @@ class ProductViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'])
     def reorder_soon(self, request):
+        # Return products that need to be reordered soon
         try:
             soon = Product.objects.filter(
                 quantity__gt=F('low_stock_level'),
@@ -178,6 +187,7 @@ class ProductViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'])
     def export_csv(self, request):
+        # Export product data to a CSV file
         try:
             products = self.get_queryset()
 
@@ -185,7 +195,7 @@ class ProductViewSet(viewsets.ModelViewSet):
             response['Content-Disposition'] = 'attachment; filename="inventory.csv"'
 
             writer = csv.writer(response)
-            writer.writerow(['Name', 'Barcode', 'Category', 'Cost Price', 'Selling Price', 'Quantity', 'Expiry Date'])
+            writer.writerow(['Name', 'Barcode', 'Category', 'Cost Price', 'Selling Price', 'Quantity', 'Nearest Expiry Date'])
 
             for p in products:
                 writer.writerow([
@@ -195,7 +205,7 @@ class ProductViewSet(viewsets.ModelViewSet):
                     p.cost_price,
                     p.selling_price,
                     p.quantity,
-                    p.expiry_date or ''
+                    p.nearest_expiry_date or ''
                 ])
 
             return response
@@ -204,6 +214,7 @@ class ProductViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'])
     def export_expiring_tomorrow(self, request):
+        # Export products expiring tomorrow to a CSV file
         tomorrow = date.today() + timedelta(days=1)
         products = Product.objects.filter(batches__expiry_date=tomorrow).distinct()
 
@@ -218,7 +229,7 @@ class ProductViewSet(viewsets.ModelViewSet):
                 product.name,
                 product.barcode,
                 product.category.name if product.category else '',
-                product.total_quantity,
+                product.quantity,
                 product.nearest_expiry_date
             ])
 
@@ -226,6 +237,7 @@ class ProductViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'])
     def total_stock_value(self, request):
+        # Calculate and return the total stock value
         try:
             total_value = Product.objects.annotate(
                 total_quantity=Sum('batches__quantity')
@@ -239,6 +251,7 @@ class ProductViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'])
     def dashboard_summary(self, request):
+        # Provide a summary of the inventory for the dashboard
         try:
             today = now().date()
             tomorrow = today + timedelta(days=1)
@@ -272,35 +285,68 @@ class ProductViewSet(viewsets.ModelViewSet):
         except Exception as e:
             raise APIException(f"Error fetching dashboard summary: {str(e)}")
 
+    @action(detail=False, methods=['get'], url_path='non-barcode')
+    def non_barcode_products(self, request):
+        # Fetch products that are active and do not have barcodes
+        products = Product.objects.filter(is_active=True, has_barcode=False)
+        result = [
+            {
+                "id": p.id,
+                "name": p.name,
+                "price": p.selling_price,
+                "image": request.build_absolute_uri(p.image.url) if p.image else None,
+                "price_by_weight": p.price_by_weight,
+            }
+            for p in products
+        ]
+        return Response(result)
+
 
 class ProductBatchViewSet(viewsets.ModelViewSet):
+    # ViewSet for managing product batches
     queryset = ProductBatch.objects.select_related('product').all()
     serializer_class = ProductBatchSerializer
     permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend]
     filterset_class = ProductBatchFilter
 
+    @transaction.atomic
     def create(self, request, *args, **kwargs):
+        # Handle batch creation with validation and logging
         try:
             serializer = self.get_serializer(data=request.data)
             serializer.is_valid(raise_exception=True)
 
-            # Validate batch quantity
+            # Validate batch quantity and expiry date
             if serializer.validated_data['quantity'] < 0:
                 raise APIException("Batch quantity cannot be negative.")
+            expiry = serializer.validated_data.get('expiry_date')
+            if expiry and expiry < date.today():
+                raise APIException("Expiry date cannot be in the past.")
 
             # Check if the product is inactive
             product = serializer.validated_data['product']
             if not product.is_active:
                 raise APIException("Cannot create a batch for an inactive product.")
 
+            # Save batch and log creation
             batch = serializer.save()
+            StockUpdateLog.objects.create(
+                product=batch.product,
+                updated_by=self.request.user,
+                change_type='batch added',
+                field_changed='quantity',
+                quantity_after=batch.quantity,
+                note=f"Batch created with expiry {batch.expiry_date}"
+            )
+
             return Response(self.get_serializer(batch).data, status=201)
         except Exception as e:
             raise APIException(f"Error creating batch: {str(e)}")
 
     @action(detail=False, methods=['get'])
     def export_expiring_tomorrow(self, request):
+        # Export batches expiring tomorrow to a CSV file
         try:
             tomorrow = date.today() + timedelta(days=1)
             batches = ProductBatch.objects.filter(expiry_date=tomorrow).exclude(expiry_date__isnull=True)
@@ -323,3 +369,21 @@ class ProductBatchViewSet(viewsets.ModelViewSet):
             return response
         except Exception as e:
             raise APIException(f"Error exporting expiring batches CSV: {str(e)}")
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def lookup_product_by_barcode(request):
+    # Endpoint to look up a product by its barcode
+    barcode = request.query_params.get('barcode')
+    if not barcode:
+        return Response({"error": "Barcode is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        product = Product.objects.get(barcode=barcode, is_active=True)
+        return Response({
+            "name": product.name,
+            "selling_price": product.selling_price
+        })
+    except Product.DoesNotExist:
+        return Response({"error": "Product not found."}, status=status.HTTP_404_NOT_FOUND)
